@@ -74,6 +74,7 @@ class OPBGA:
         self.population: List[Chromosome] = []
         self.best_chromosome: Chromosome | None = None
         self.fitness_history: List[float] = []
+        self.total_comp_time = sum(t.computation_time for t in tasks)
 
     # --------------------- GA OPERATORS ---------------------
     def initialize_population(self):
@@ -120,9 +121,9 @@ class OPBGA:
         chromosome.schedule_length = max_completion
 
         if dlms == 0:
-            norm_len = max_completion / 1000
-            norm_art = art / 100
-            norm_atat = atat / 100
+            norm_len = max_completion / self.total_comp_time
+            norm_art = art / self.total_comp_time
+            norm_atat = atat / self.total_comp_time
             fitness = 0.25 * (norm_len + norm_art + norm_atat)
         else:
             fitness = dlms + max_completion + art + atat
@@ -150,12 +151,27 @@ class OPBGA:
     def crossover(self, p1: Chromosome, p2: Chromosome) -> Tuple[Chromosome, Chromosome]:
         if random.random() > self.crossover_rate:
             return p1.copy(), p2.copy()
+
+        size = len(p1.scheduling)
+        cp = random.randint(1, size - 1)
+
+        def order_cross(a: Chromosome, b: Chromosome) -> np.ndarray:
+            child = [-1] * size
+            child[:cp] = a.scheduling[:cp]
+            pos = cp
+            for gene in b.scheduling:
+                if gene not in child:
+                    child[pos] = gene
+                    pos += 1
+            return np.array(child)
+
         c1 = p1.copy()
         c2 = p2.copy()
-        # single point at boundary between scheduling and mapping
-        c1.mapping = p2.mapping.copy()
-        c2.mapping = p1.mapping.copy()
-        # scheduling part preserved from respective parents
+        c1.scheduling = order_cross(p1, p2)
+        c2.scheduling = order_cross(p2, p1)
+
+        c1.mapping = np.concatenate([p1.mapping[:cp], p2.mapping[cp:]])
+        c2.mapping = np.concatenate([p2.mapping[:cp], p1.mapping[cp:]])
         return c1, c2
 
     def mutate(self, chromosome: Chromosome):
