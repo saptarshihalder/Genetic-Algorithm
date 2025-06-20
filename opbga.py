@@ -84,8 +84,6 @@ class OPBGA:
         ]
 
     def evaluate_chromosome(self, chromosome: Chromosome) -> float:
-        processors = [Processor(i) for i in range(self.num_processors)]
-
         # group tasks per processor following scheduling order
         task_groups = [[] for _ in range(self.num_processors)]
         for idx in chromosome.scheduling:
@@ -125,7 +123,7 @@ class OPBGA:
             norm_len = max_completion / self.total_comp_time
             norm_art = art / self.total_comp_time
             norm_atat = atat / self.total_comp_time
-            fitness = 0.25 * (norm_len + norm_art + norm_atat)
+            fitness = (norm_len + norm_art + norm_atat) / 3.0
         else:
             # infeasible schedule – apply huge fixed penalty
             fitness = 1_000_000 * dlms
@@ -152,6 +150,7 @@ class OPBGA:
 
     def sus_selection(self, k: int = 2) -> List[Chromosome]:
         """Select k parents with stochastic-universal sampling."""
+        k = min(k, len(self.population))
         fitnesses = np.array([1.0 / (c.fitness + 1e-6) for c in self.population])
         probs = fitnesses / fitnesses.sum()
         cumulative = np.cumsum(probs)
@@ -222,7 +221,6 @@ class OPBGA:
                 new_pop.extend([child1, child2])
 
             self.population = new_pop[: self.population_size]
-            self.evaluate_population()
             # diversity restart
             if np.std([c.fitness for c in self.population]) < 1e-4:
                 num_new = int(0.1 * self.population_size)
@@ -230,6 +228,7 @@ class OPBGA:
                     Chromosome(len(self.tasks), self.num_processors)
                     for _ in range(num_new)
                 ]
+            self.evaluate_population()
 
             if gen % 10 == 0:
                 print(
