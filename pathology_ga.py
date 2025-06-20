@@ -26,7 +26,11 @@ class ImprovedGeneticAlgorithm:
         self.generations = generations
         self.crossover_rate = crossover_rate
         self.mutation_rate = mutation_rate
-        self.hist, _ = np.histogram(image, bins=256, range=(0, 255))
+        if image.ndim == 3:
+            seq = self._ratio_projection(image)
+            self.hist, _ = np.histogram(seq, bins=256, range=(0, 255))
+        else:
+            self.hist, _ = np.histogram(image, bins=256, range=(0, 255))
         self.hist = self.hist / self.hist.sum()
         self.pdf_idx = np.arange(256)
         self.current_pc = crossover_rate
@@ -97,11 +101,22 @@ class ImprovedGeneticAlgorithm:
         child2['thr'][cut1:cut2] = p1['thr'][cut1:cut2]
         child1['thr'] = np.round(child1['thr'])
         child2['thr'] = np.round(child2['thr'])
+        child1['thr'] = np.sort(child1['thr'][: child1['m']])
+        child2['thr'] = np.sort(child2['thr'][: child2['m']])
         child1['fitness'] = 0.0
         child2['fitness'] = 0.0
         return child1, child2
 
     def mutate(self, ind: dict, gen: int):
+        # allow the number of thresholds to change slightly
+        if random.random() < 0.05:
+            ind['m'] = int(np.clip(ind['m'] + random.choice([-1, 1]), 2, 6))
+            if len(ind['thr']) < ind['m']:
+                extra = np.random.randint(1, 255, 1)
+                ind['thr'] = np.sort(np.append(ind['thr'], extra))
+            else:
+                ind['thr'] = np.sort(ind['thr'][: ind['m']])
+
         strength = 1.0 - 0.7 * gen / self.generations
         for i in range(ind['m']):
             if random.random() < self.mutation_rate:
@@ -160,6 +175,16 @@ class ImprovedGeneticAlgorithm:
         return self.best['thr']
 
     # ------------------------- UTILITIES -------------------------
+    @staticmethod
+    def _ratio_projection(img: np.ndarray) -> np.ndarray:
+        """Project RGB image rows to epithelial ratios (Algorithm 1)."""
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        h = hsv[..., 0]
+        epi_mask = (h < 170) & (h > 110)
+        ratio = epi_mask.mean(axis=1)
+        seq = np.uint8(ratio * 255)
+        return seq
+
     def segment(self, thresholds: np.ndarray) -> np.ndarray:
         seg = np.zeros_like(self.image, dtype=np.uint8)
         t = np.concatenate([[0], thresholds, [255]])
