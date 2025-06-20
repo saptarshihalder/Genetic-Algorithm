@@ -121,12 +121,14 @@ class OPBGA:
         chromosome.schedule_length = max_completion
 
         if dlms == 0:
+            # normalised, multi-objective term (same as before)
             norm_len = max_completion / self.total_comp_time
             norm_art = art / self.total_comp_time
             norm_atat = atat / self.total_comp_time
             fitness = 0.25 * (norm_len + norm_art + norm_atat)
         else:
-            fitness = dlms + max_completion + art + atat
+            # infeasible schedule – apply huge fixed penalty
+            fitness = 1_000_000 * dlms
 
         chromosome.fitness = fitness
         return fitness
@@ -147,6 +149,16 @@ class OPBGA:
             if r <= cum:
                 return self.population[idx].copy()
         return self.population[-1].copy()
+
+    def sus_selection(self, k: int = 2) -> List[Chromosome]:
+        """Select k parents with stochastic-universal sampling."""
+        fitnesses = np.array([1.0 / (c.fitness + 1e-6) for c in self.population])
+        probs = fitnesses / fitnesses.sum()
+        cumulative = np.cumsum(probs)
+        start = random.random() / k
+        pointers = start + np.arange(k) / k
+        idx = [np.searchsorted(cumulative, p) for p in pointers]
+        return [self.population[i].copy() for i in idx]
 
     def crossover(self, p1: Chromosome, p2: Chromosome) -> Tuple[Chromosome, Chromosome]:
         if random.random() > self.crossover_rate:
@@ -175,12 +187,17 @@ class OPBGA:
         return c1, c2
 
     def mutate(self, chromosome: Chromosome):
+        # 2a. swap two tasks in the order half
         if random.random() < self.mutation_rate:
             i1, i2 = random.sample(range(len(chromosome.scheduling)), 2)
             chromosome.scheduling[i1], chromosome.scheduling[i2] = (
                 chromosome.scheduling[i2],
                 chromosome.scheduling[i1],
             )
+        # 2b. flip a processor assignment
+        if random.random() < self.mutation_rate:
+            j = random.randrange(len(chromosome.mapping))
+            chromosome.mapping[j] = random.randrange(self.num_processors)
 
     # --------------------- GA EXECUTION ---------------------
     def run(self) -> Chromosome:
@@ -198,8 +215,7 @@ class OPBGA:
             new_pop.extend([c.copy() for c in self.population[:elite]])
 
             while len(new_pop) < self.population_size:
-                parent1 = self.roulette_wheel_selection()
-                parent2 = self.roulette_wheel_selection()
+                parent1, parent2 = self.sus_selection(2)
                 child1, child2 = self.crossover(parent1, parent2)
                 self.mutate(child1)
                 self.mutate(child2)
@@ -207,6 +223,13 @@ class OPBGA:
 
             self.population = new_pop[: self.population_size]
             self.evaluate_population()
+            # diversity restart
+            if np.std([c.fitness for c in self.population]) < 1e-4:
+                num_new = int(0.1 * self.population_size)
+                self.population[-num_new:] = [
+                    Chromosome(len(self.tasks), self.num_processors)
+                    for _ in range(num_new)
+                ]
 
             if gen % 10 == 0:
                 print(
