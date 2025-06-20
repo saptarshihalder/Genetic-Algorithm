@@ -38,8 +38,9 @@ class ImprovedGeneticAlgorithm:
     def initialize_population(self):
         self.population = []
         for _ in range(self.population_size):
-            t = np.sort(np.random.randint(1, 255, self.num_thresholds))
-            self.population.append({'thr': t.astype(float), 'm': self.num_thresholds, 'fitness': 0.0})
+            m = np.random.randint(2, 7)
+            t = np.sort(np.random.randint(1, 255, m))
+            self.population.append({'thr': t.astype(float), 'm': m, 'fitness': 0.0})
 
     def between_class_variance(self, t: np.ndarray) -> float:
         boundaries = np.concatenate([[0], t, [255]])
@@ -67,11 +68,7 @@ class ImprovedGeneticAlgorithm:
     def evaluate_individual(self, ind: dict) -> float:
         t = np.clip(np.sort(ind['thr'][: ind['m']]), 1, 254)
         entropy = self.kapur_entropy(t)
-        # penalty for very close thresholds
         penalty = 0
-        for i in range(len(t)-1):
-            if t[i+1] - t[i] < 5:
-                penalty += 0.1
         ind['thr'] = t
         ind['fitness'] = entropy - penalty
         return ind['fitness']
@@ -91,37 +88,58 @@ class ImprovedGeneticAlgorithm:
         return np.random.choice(self.population, p=probs).copy()
 
     def crossover(self, p1: dict, p2: dict) -> Tuple[dict, dict]:
-        if random.random() > self.current_pc:
+        if random.random() >= self.current_pc:
             return p1.copy(), p2.copy()
-        if self.num_thresholds < 3:
-            idx1 = random.randrange(1, self.num_thresholds)
-            idx2 = self.num_thresholds
-        else:
-            idx1, idx2 = sorted(random.sample(range(1, self.num_thresholds), 2))
-        c1, c2 = p1.copy(), p2.copy()
-        c1['thr'][idx1:idx2] = p2['thr'][idx1:idx2]
-        c2['thr'][idx1:idx2] = p1['thr'][idx1:idx2]
-        c1['fitness'] = 0.0
-        c2['fitness'] = 0.0
-        return c1, c2
+        N = min(p1['m'], p2['m'])
+        cut1, cut2 = sorted(random.sample(range(1, N), 2) if N > 2 else [1, N])
+        child1, child2 = p1.copy(), p2.copy()
+        child1['thr'][cut1:cut2] = p2['thr'][cut1:cut2]
+        child2['thr'][cut1:cut2] = p1['thr'][cut1:cut2]
+        child1['thr'] = np.round(child1['thr'])
+        child2['thr'] = np.round(child2['thr'])
+        child1['fitness'] = 0.0
+        child2['fitness'] = 0.0
+        return child1, child2
 
     def mutate(self, ind: dict, gen: int):
         strength = 1.0 - 0.7 * gen / self.generations
-        for i in range(self.num_thresholds):
+        for i in range(ind['m']):
             if random.random() < self.mutation_rate:
                 delta = np.random.normal(0, 10 * strength)
                 ind['thr'][i] = np.clip(ind['thr'][i] + delta, 1, 254)
         ind['thr'] = np.sort(ind['thr'])
 
+    def local_refine(self, ind: dict):
+        improved = True
+        while improved:
+            improved = False
+            for k in range(ind['m']):
+                for step in (-1, +1):
+                    trial = ind['thr'].copy()
+                    trial[k] = np.clip(trial[k] + step, 1, 254)
+                    fitness = self.kapur_entropy(trial)
+                    if fitness > ind['fitness']:
+                        ind['thr'], ind['fitness'] = trial, fitness
+                        improved = True
+
     # ------------------------- MAIN LOOP -------------------------
     def run(self) -> np.ndarray:
         self.initialize_population()
         self.evaluate_population()
+        self.local_refine(self.population[0])
+        self.population.sort(key=lambda x: x['fitness'], reverse=True)
+        self.best = self.population[0].copy()
+        best_fitness = self.best['fitness']
+        no_improve = 0
         for g in range(self.generations):
             self.population.sort(key=lambda x: x['fitness'], reverse=True)
-            if self.best is None or self.population[0]['fitness'] > self.best['fitness']:
+            if self.population[0]['fitness'] > best_fitness:
                 self.best = self.population[0].copy()
-            self.fitness_history.append(self.best['fitness'])
+                best_fitness = self.best['fitness']
+                no_improve = 0
+            else:
+                no_improve += 1
+            self.fitness_history.append(best_fitness)
             new_pop: List[dict] = [ind.copy() for ind in self.population[:max(1, int(0.1*self.population_size))]]
             while len(new_pop) < self.population_size:
                 p1 = self.select_parent()
@@ -132,7 +150,13 @@ class ImprovedGeneticAlgorithm:
                 new_pop.extend([c1, c2])
             self.population = new_pop[:self.population_size]
             self.evaluate_population()
+            self.local_refine(self.population[0])
+            diversity = np.std([t for ind in self.population for t in ind['thr']])
+            if diversity < 2:
+                self.mutation_rate = max(self.mutation_rate * 0.5, 0.005)
             self.current_pc = 0.9 * (1 - g / self.generations) ** 0.7
+            if no_improve >= 20:
+                break
         return self.best['thr']
 
     # ------------------------- UTILITIES -------------------------
