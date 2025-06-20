@@ -28,6 +28,8 @@ class ImprovedGeneticAlgorithm:
         self.mutation_rate = mutation_rate
         self.hist, _ = np.histogram(image, bins=256, range=(0, 255))
         self.hist = self.hist / self.hist.sum()
+        self.pdf_idx = np.arange(256)
+        self.current_pc = crossover_rate
         self.population: List[dict] = []
         self.best: Optional[dict] = None
         self.fitness_history: List[float] = []
@@ -37,7 +39,7 @@ class ImprovedGeneticAlgorithm:
         self.population = []
         for _ in range(self.population_size):
             t = np.sort(np.random.randint(1, 255, self.num_thresholds))
-            self.population.append({'thr': t.astype(float), 'fitness': 0.0})
+            self.population.append({'thr': t.astype(float), 'm': self.num_thresholds, 'fitness': 0.0})
 
     def between_class_variance(self, t: np.ndarray) -> float:
         boundaries = np.concatenate([[0], t, [255]])
@@ -51,16 +53,27 @@ class ImprovedGeneticAlgorithm:
                 var += p * (mu - total_mean) ** 2
         return var
 
+    def kapur_entropy(self, t: np.ndarray) -> float:
+        b = np.concatenate([[0], t, [255]])
+        H = 0.0
+        for i in range(len(b) - 1):
+            mask = (self.pdf_idx >= b[i]) & (self.pdf_idx < b[i + 1])
+            p = self.hist[mask]
+            psum = p.sum()
+            if psum > 0:
+                H -= np.sum((p / psum) * np.log(p / psum + 1e-12)) * psum
+        return H
+
     def evaluate_individual(self, ind: dict) -> float:
-        t = np.clip(np.sort(ind['thr']), 1, 254)
-        var = self.between_class_variance(t)
+        t = np.clip(np.sort(ind['thr'][: ind['m']]), 1, 254)
+        entropy = self.kapur_entropy(t)
         # penalty for very close thresholds
         penalty = 0
         for i in range(len(t)-1):
             if t[i+1] - t[i] < 5:
                 penalty += 0.1
         ind['thr'] = t
-        ind['fitness'] = var - penalty
+        ind['fitness'] = entropy - penalty
         return ind['fitness']
 
     def evaluate_population(self):
@@ -68,30 +81,28 @@ class ImprovedGeneticAlgorithm:
             self.evaluate_individual(ind)
 
     def select_parent(self) -> dict:
-        self.population.sort(key=lambda x: x['fitness'], reverse=True)
-        elite = max(1, int(0.2 * self.population_size))
-        if random.random() < 0.3:
-            return self.population[random.randint(0, elite-1)].copy()
-        # tournament
-        tour = random.sample(self.population, 5)
-        return max(tour, key=lambda x: x['fitness']).copy()
+        fits = np.array([ind['fitness'] for ind in self.population])
+        f_min, f_max = fits.min(), fits.max()
+        if f_max - f_min <= 1e-9:
+            idx = np.random.randint(len(self.population))
+            return self.population[idx].copy()
+        scaled = (fits - f_min) / (f_max - f_min)
+        probs = scaled / scaled.sum()
+        return np.random.choice(self.population, p=probs).copy()
 
     def crossover(self, p1: dict, p2: dict) -> Tuple[dict, dict]:
-        if random.random() > self.crossover_rate:
+        if random.random() > self.current_pc:
             return p1.copy(), p2.copy()
-        c1 = {'thr': np.zeros(self.num_thresholds), 'fitness': 0.0}
-        c2 = {'thr': np.zeros(self.num_thresholds), 'fitness': 0.0}
-        alpha = 0.5
-        for i in range(self.num_thresholds):
-            lo = min(p1['thr'][i], p2['thr'][i])
-            hi = max(p1['thr'][i], p2['thr'][i])
-            ran = hi - lo
-            lower = max(1, lo - alpha * ran)
-            upper = min(254, hi + alpha * ran)
-            c1['thr'][i] = random.uniform(lower, upper)
-            c2['thr'][i] = random.uniform(lower, upper)
-        c1['thr'] = np.sort(c1['thr'])
-        c2['thr'] = np.sort(c2['thr'])
+        if self.num_thresholds < 3:
+            idx1 = random.randrange(1, self.num_thresholds)
+            idx2 = self.num_thresholds
+        else:
+            idx1, idx2 = sorted(random.sample(range(1, self.num_thresholds), 2))
+        c1, c2 = p1.copy(), p2.copy()
+        c1['thr'][idx1:idx2] = p2['thr'][idx1:idx2]
+        c2['thr'][idx1:idx2] = p1['thr'][idx1:idx2]
+        c1['fitness'] = 0.0
+        c2['fitness'] = 0.0
         return c1, c2
 
     def mutate(self, ind: dict, gen: int):
@@ -121,6 +132,7 @@ class ImprovedGeneticAlgorithm:
                 new_pop.extend([c1, c2])
             self.population = new_pop[:self.population_size]
             self.evaluate_population()
+            self.current_pc = 0.9 * (1 - g / self.generations) ** 0.7
         return self.best['thr']
 
     # ------------------------- UTILITIES -------------------------
