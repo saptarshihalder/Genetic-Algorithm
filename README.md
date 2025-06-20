@@ -32,3 +32,16 @@ pytest
 ## Papers
 
 The repository includes two PDF files (`PAPER 1.pdf` and `PAPER 2.pdf`) that describe the underlying scheduling problem and the OPBGA approach.
+
+## Pathology Image Segmentation
+
+`pathology_ga.py` implements an improved Genetic Algorithm for multi-threshold
+segmentation of pathology images. The module includes a small example which can
+be run directly:
+
+```bash
+python pathology_ga.py
+```
+
+Running the script will generate a synthetic image, optimise thresholds and
+display the resulting segmentation.
