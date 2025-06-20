@@ -5,7 +5,7 @@ This repository contains an implementation of an Optimized Performance Based Gen
 ## Installation
 
 1. Create a Python environment (optional but recommended).
-2. Install dependencies:
+2. Install dependencies (Numba is used for fast evaluation):
    ```bash
    pip install -r requirements.txt
    ```

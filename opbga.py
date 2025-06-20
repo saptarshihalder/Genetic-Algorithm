@@ -3,6 +3,7 @@ import random
 from dataclasses import dataclass
 from typing import List, Tuple
 import matplotlib.pyplot as plt
+from numba import njit
 
 @dataclass
 class Task:
@@ -53,6 +54,34 @@ class Chromosome:
         c.schedule_length = self.schedule_length
         return c
 
+@njit
+def _evaluate_njit(arrivals, comps, deadlines, scheduling, mapping, num_processors):
+    n = scheduling.shape[0]
+    dlms = 0
+    total_rt = 0.0
+    total_tat = 0.0
+    max_completion = 0.0
+
+    for p in range(num_processors):
+        current = 0.0
+        for i in range(n):
+            idx = scheduling[i]
+            if mapping[idx] != p:
+                continue
+            arrival = arrivals[idx]
+            comp = comps[idx]
+            deadline = deadlines[idx]
+            start = current if current > arrival else arrival
+            end = start + comp
+            if end > deadline:
+                dlms += 1
+            total_rt += start - arrival
+            total_tat += end - arrival
+            current = end
+            if end > max_completion:
+                max_completion = end
+    return dlms, total_rt, total_tat, max_completion
+
 class OPBGA:
     """Optimized Performance Based Genetic Algorithm."""
 
@@ -74,7 +103,13 @@ class OPBGA:
         self.population: List[Chromosome] = []
         self.best_chromosome: Chromosome | None = None
         self.fitness_history: List[float] = []
-        self.total_comp_time = sum(t.computation_time for t in tasks)
+        self.dlm_history: List[int] = []
+        self.makespan_history: List[float] = []
+        self.total_comp_time = max(1e-9, sum(t.computation_time for t in tasks))
+        # cache task attributes for numba evaluation
+        self._arrivals = np.array([t.arrival_time for t in tasks], dtype=np.float64)
+        self._comps = np.array([t.computation_time for t in tasks], dtype=np.float64)
+        self._deadlines = np.array([t.deadline for t in tasks], dtype=np.float64)
 
     # --------------------- GA OPERATORS ---------------------
     def initialize_population(self):
@@ -84,36 +119,19 @@ class OPBGA:
         ]
 
     def evaluate_chromosome(self, chromosome: Chromosome) -> float:
-        # group tasks per processor following scheduling order
-        task_groups = [[] for _ in range(self.num_processors)]
-        for idx in chromosome.scheduling:
-            proc_id = chromosome.mapping[idx]
-            task_groups[proc_id].append(idx)
-
-        dlms = 0
-        total_rt = 0.0
-        total_tat = 0.0
-        max_completion = 0.0
-
-        for proc_id, t_indices in enumerate(task_groups):
-            current = 0.0
-            for t_idx in t_indices:
-                task = self.tasks[t_idx]
-                start = max(current, task.arrival_time)
-                end = start + task.computation_time
-                if end > task.deadline:
-                    dlms += 1
-                rt = start - task.arrival_time
-                tat = end - task.arrival_time
-                total_rt += rt
-                total_tat += tat
-                current = end
-                max_completion = max(max_completion, end)
+        dlms, total_rt, total_tat, max_completion = _evaluate_njit(
+            self._arrivals,
+            self._comps,
+            self._deadlines,
+            chromosome.scheduling,
+            chromosome.mapping,
+            self.num_processors,
+        )
 
         n = len(self.tasks)
         art = total_rt / n
         atat = total_tat / n
-        chromosome.dlms = dlms
+        chromosome.dlms = int(dlms)
         chromosome.art = art
         chromosome.atat = atat
         chromosome.schedule_length = max_completion
@@ -134,19 +152,6 @@ class OPBGA:
     def evaluate_population(self):
         for c in self.population:
             self.evaluate_chromosome(c)
-
-    def roulette_wheel_selection(self) -> Chromosome:
-        # stochastic uniform selection (roulette wheel)
-        fitnesses = [1.0 / (c.fitness + 1e-6) for c in self.population]
-        total = sum(fitnesses)
-        probs = [f / total for f in fitnesses]
-        r = random.random()
-        cum = 0.0
-        for idx, p in enumerate(probs):
-            cum += p
-            if r <= cum:
-                return self.population[idx].copy()
-        return self.population[-1].copy()
 
     def sus_selection(self, k: int = 2) -> List[Chromosome]:
         """Select k parents with stochastic-universal sampling."""
@@ -200,6 +205,8 @@ class OPBGA:
 
     # --------------------- GA EXECUTION ---------------------
     def run(self) -> Chromosome:
+        random.seed(42)
+        np.random.seed(42)
         self.initialize_population()
         self.evaluate_population()
 
@@ -208,6 +215,8 @@ class OPBGA:
             if self.best_chromosome is None or self.population[0].fitness < self.best_chromosome.fitness:
                 self.best_chromosome = self.population[0].copy()
             self.fitness_history.append(self.best_chromosome.fitness)
+            self.dlm_history.append(self.best_chromosome.dlms)
+            self.makespan_history.append(self.best_chromosome.schedule_length)
 
             new_pop: List[Chromosome] = []
             elite = int(0.1 * self.population_size)
