@@ -95,7 +95,10 @@ class ImprovedGeneticAlgorithm:
         if random.random() >= self.current_pc:
             return p1.copy(), p2.copy()
         N = min(p1['m'], p2['m'])
-        cut1, cut2 = sorted(random.sample(range(1, N), 2) if N > 2 else [1, N])
+        if N == 2:
+            cut1, cut2 = 1, 2
+        else:
+            cut1, cut2 = sorted(random.sample(range(1, N), 2))
         child1, child2 = p1.copy(), p2.copy()
         child1['thr'][cut1:cut2] = p2['thr'][cut1:cut2]
         child2['thr'][cut1:cut2] = p1['thr'][cut1:cut2]
@@ -122,6 +125,7 @@ class ImprovedGeneticAlgorithm:
             if random.random() < self.mutation_rate:
                 delta = np.random.normal(0, 10 * strength)
                 ind['thr'][i] = np.clip(ind['thr'][i] + delta, 1, 254)
+        ind['thr'] = np.round(ind['thr']).astype(int)
         ind['thr'] = np.sort(ind['thr'])
 
     def local_refine(self, ind: dict):
@@ -141,9 +145,9 @@ class ImprovedGeneticAlgorithm:
     def run(self) -> np.ndarray:
         self.initialize_population()
         self.evaluate_population()
-        self.local_refine(self.population[0])
         self.population.sort(key=lambda x: x['fitness'], reverse=True)
         self.best = self.population[0].copy()
+        self.local_refine(self.best)
         best_fitness = self.best['fitness']
         no_improve = 0
         for g in range(self.generations):
@@ -165,6 +169,7 @@ class ImprovedGeneticAlgorithm:
                 new_pop.extend([c1, c2])
             self.population = new_pop[:self.population_size]
             self.evaluate_population()
+            self.population.sort(key=lambda x: x['fitness'], reverse=True)
             self.local_refine(self.population[0])
             diversity = np.std([t for ind in self.population for t in ind['thr']])
             if diversity < 2:
